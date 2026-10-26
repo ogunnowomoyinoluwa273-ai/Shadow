@@ -1,10 +1,17 @@
 import { performance } from 'node:perf_hooks'
-import { extractText, parseCommand } from '../utils/message.js'
+import { extractText, getQuotedMessageInfo, parseCommand } from '../utils/message.js'
 import { isGroupJid, sameJid } from '../utils/jid.js'
-import { authenticatedAccountIsOwner, botIsAdmin, isOwner, isOwnerMessage, messageSender } from '../utils/permissions.js'
+import { authenticatedAccountIsOwner, botIdentityJids, botIsAdmin, isOwner, isOwnerMessage, messageSender } from '../utils/permissions.js'
 import { logger } from '../utils/logger.js'
 import { errorLogDetails, GENERIC_FAILURE_MESSAGE, UserFacingError } from '../utils/errors.js'
 import { detectProhibitedLink } from '../services/antiLink.js'
+
+export function classifyQuotedSender(quoted, sock, config) {
+  if (!quoted) return 'unknown'
+  if (quoted.fromMe || quoted.sender && botIdentityJids(sock).some(identity => sameJid(identity, quoted.sender))) return 'shadow'
+  if (quoted.sender && isOwner(quoted.sender, config)) return 'owner'
+  return quoted.sender ? 'participant' : 'unknown'
+}
 
 export function createMessageHandler({ sock, commands, settings, config, seen, onAutoDelete, aiBrain = null, reactions = null, modelRouter = null, metrics = {}, log = logger }) {
   const lastMessageAt = new Map()
@@ -37,7 +44,9 @@ export function createMessageHandler({ sock, commands, settings, config, seen, o
         }
         if (aiBrain && aiBrain.parseShadowAddress?.(text) !== null) {
           const aiOwner = Boolean(message.key?.fromMe && authenticatedAccountIsOwner(sock, config)) || isOwner(sender, config)
-          const handled = await aiBrain.run({ text, message, sock, sender, owner: aiOwner, reactions })
+          const quoted = getQuotedMessageInfo(message)
+          if (quoted) quoted.role = classifyQuotedSender(quoted, sock, config)
+          const handled = await aiBrain.run({ text, message, sock, sender, owner: aiOwner, reactions, quoted })
           if (handled) { if (!aiOwner && !commands.sudo?.has?.(sender)) count('deniedCommands'); continue }
         }
         const parsed = parseCommand(text.trim(), config.prefix); if (!parsed) continue
